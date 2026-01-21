@@ -1,0 +1,39 @@
+
+**📄 requirements.txt** (основные зависимости):
+```txt
+# Основной стек
+Flask==2.3.3
+Flask-SQLAlchemy==3.0.5
+Flask-CORS==4.0.0
+Flask-Migrate==4.0.4
+
+# База данных
+psycopg2-binary==2.9.7
+SQLAlchemy==2.0.19
+
+# AI и обработка данных
+nltk==3.8.1
+scikit-learn==1.3.0
+pandas==2.1.1
+numpy==1.24.3
+
+# HTTP клиенты
+requests==2.31.0
+aiohttp==3.8.5
+
+# Валидация
+pydantic==2.3.0
+marshmallow==3.20.1
+
+# Утилиты
+python-dotenv==1.0.0
+python-dateutil==2.8.2
+pytz==2023.3
+
+# Тестирование
+pytest==7.4.2
+pytest-cov==4.1.0
+factory-boy==3.3.0
+
+# Документация
+sphinx==7.2.6
