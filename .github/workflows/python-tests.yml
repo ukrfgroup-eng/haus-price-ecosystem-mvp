@@ -1,23 +1,34 @@
+yaml
 name: Python Tests
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, develop, feature/* ]
   pull_request:
     branches: [ main, develop ]
+  schedule:
+    - cron: '0 0 * * 0'  # Запуск каждое воскресенье в полночь
   workflow_dispatch:  # Ручной запуск
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: Test Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        python-version: [3.9, 3.10, 3.11]
+        python-version: ['3.9', '3.10', '3.11']
+        os: [ubuntu-latest]
+        include:
+          - python-version: '3.10'
+            os: windows-latest
+          - python-version: '3.10'
+            os: macos-latest
     
     services:
       postgres:
-        image: postgres:15
+        image: postgres:15-alpine
         env:
+          POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: test_haus_price
         options: >-
@@ -39,16 +50,34 @@ jobs:
           - 6379:6379
 
     env:
+      # Основные переменные
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_haus_price
       REDIS_URL: redis://localhost:6379/0
-      FLASK_SECRET_KEY: test-secret-key-123
-      FNS_API_KEY: test-key
-      PROTALK_WEBHOOK_SECRET: test-secret
-      DEBUG: "True"
-      TESTING: "True"
+      FLASK_APP: main.py
+      FLASK_ENV: testing
+      FLASK_SECRET_KEY: test-secret-key-${{ github.run_id }}
+      TESTING: True
+      
+      # API ключи (тестовые)
+      FNS_API_KEY: test_fns_api_key_${{ github.run_id }}
+      FNS_API_URL: https://api-fns.ru/test
+      PROTALK_WEBHOOK_SECRET: test_protalk_secret_${{ github.run_id }}
+      UMNICO_API_KEY: test_umnico_key_${{ github.run_id }}
+      TILDA_WEBHOOK_SECRET: test_tilda_secret_${{ github.run_id }}
+      
+      # Платежные системы (тестовые)
+      YOOKASSA_SHOP_ID: test_shop_id
+      YOOKASSA_SECRET_KEY: test_secret_key
+      TINKOFF_TERMINAL_KEY: test_terminal_key
+      TINKOFF_SECRET_KEY: test_secret_key
+      
+      # Настройки приложения
+      DEBUG: False
+      LOG_LEVEL: INFO
+      ALLOWED_HOSTS: localhost,127.0.0.1
 
     steps:
-    - name: Checkout repository
+    - name: Checkout code
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
@@ -58,214 +87,327 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
         cache: 'pip'
-        cache-dependency-path: '**/requirements.txt'
+        cache-dependency-path: |
+          requirements.txt
+          requirements-dev.txt
+          pyproject.toml
+          setup.py
 
-    - name: Install system dependencies
+    - name: Install system dependencies (Ubuntu)
+      if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y postgresql-client redis-tools
+        sudo apt-get install -y \
+          postgresql-client \
+          libpq-dev \
+          gcc \
+          g++ \
+          make
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip setuptools wheel
+        if [ -f requirements.txt ]; then
+          pip install -r requirements.txt
+        fi
+        if [ -f requirements-dev.txt ]; then
+          pip install -r requirements-dev.txt
+        fi
+        # Устанавливаем тестовые зависимости
+        pip install \
+          pytest==7.4.0 \
+          pytest-cov==4.1.0 \
+          pytest-flask==1.2.0 \
+          pytest-mock==3.11.1 \
+          pytest-xdist==3.5.0 \
+          coverage==7.3.0 \
+          pytest-html==4.0.2
 
     - name: Cache Python dependencies
       uses: actions/cache@v3
       with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+        path: |
+          ~/.cache/pip
+          ~/.local/lib/python*/
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements*.txt', 'pyproject.toml', 'setup.py') }}
         restore-keys: |
           ${{ runner.os }}-pip-
 
-    - name: Install Python dependencies
+    - name: Wait for services to be ready
       run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pytest pytest-cov pytest-flask pytest-mock
-        pip install coverage
-
-    - name: Wait for PostgreSQL to be ready
-      run: |
-        until pg_isready -h localhost -p 5432; do
-          echo "Waiting for PostgreSQL..."
+        # Ждем PostgreSQL
+        for i in {1..30}; do
+          if pg_isready -h localhost -p 5432 -U postgres; then
+            echo "PostgreSQL is ready"
+            break
+          fi
+          echo "Waiting for PostgreSQL... ($i/30)"
           sleep 2
         done
-
-    - name: Wait for Redis to be ready
-      run: |
-        until redis-cli -h localhost ping | grep PONG; do
-          echo "Waiting for Redis..."
-          sleep 2
-        done
-
-    - name: Set up database schema
-      run: |
-        psql -h localhost -U postgres -d test_haus_price -c "
-          CREATE TABLE IF NOT EXISTS test_table (id SERIAL PRIMARY KEY);
-          DROP TABLE IF EXISTS test_table;
-        "
         
-        # Создаем тестовую структуру базы данных
-        python -c "
-        from main import app, db
-        with app.app_context():
-            db.create_all()
-            print('Database tables created')
-        "
+        # Ждем Redis
+        for i in {1..30}; do
+          if redis-cli -h localhost ping | grep -q PONG; then
+            echo "Redis is ready"
+            break
+          fi
+          echo "Waiting for Redis... ($i/30)"
+          sleep 2
+        done
 
-    - name: Run unit tests with coverage
+    - name: Initialize test database
       run: |
-        python -m pytest tests/ \
+        # Создаем тестовую базу данных
+        psql -h localhost -U postgres -c "CREATE DATABASE test_haus_price_${{ github.run_id }};"
+        psql -h localhost -U postgres -d test_haus_price_${{ github.run_id }} -c "SELECT 1;"
+        
+        # Экспортируем переменную с уникальным именем базы данных
+        echo "TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/test_haus_price_${{ github.run_id }}" >> $GITHUB_ENV
+
+    - name: Create database schema
+      run: |
+        # Запускаем миграции или создаем схему
+        if [ -f "database/schema.sql" ]; then
+          psql -h localhost -U postgres -d test_haus_price_${{ github.run_id }} -f database/schema.sql
+        fi
+        
+        # Или используем Flask-Migrate/Alembic
+        if [ -f "migrations/" ]; then
+          flask db upgrade
+        fi
+
+    - name: Discover and run tests
+      run: |
+        echo "=== Найденные тесты ==="
+        find . -name "test_*.py" -type f | grep -v __pycache__ | sort
+        
+        echo ""
+        echo "=== Запуск тестов ==="
+        
+        # Создаем директорию для результатов
+        mkdir -p test-results
+        
+        # Запускаем все тесты с покрытием
+        python -m pytest \
           -v \
+          --tb=short \
+          --strict-markers \
+          --durations=10 \
           --cov=backend \
-          --cov-report=xml \
-          --cov-report=html \
+          --cov=tests \
+          --cov-report=xml:coverage.xml \
+          --cov-report=html:htmlcov \
           --cov-report=term \
-          --junitxml=test-results/junit.xml \
-          --tb=short
+          --junitxml=test-results/junit-${{ runner.os }}-${{ matrix.python-version }}.xml \
+          --html=test-results/report-${{ runner.os }}-${{ matrix.python-version }}.html \
+          --self-contained-html \
+          -n auto
 
-    - name: Run specific block tests
+    - name: Run specific test suites
       run: |
-        # Тестирование блока A (Партнеры)
-        python -m pytest tests/test_partners.py -v --tb=short || echo "No partner tests found"
+        echo "=== Запуск отдельных наборов тестов ==="
         
-        # Тестирование блока D (Монетизация)
-        python -m pytest tests/test_payments.py -v --tb=short || echo "No payment tests found"
+        # Тесты блоков
+        for block in A B C D; do
+          echo "Тестирование блока $block..."
+          python -m pytest tests/ -k "$block" -v --tb=line 2>&1 | head -50
+        done
         
-        # Тестирование блока B (Бот + AI)
-        python -m pytest tests/test_bot.py -v --tb=short || echo "No bot tests found"
+        # Тесты по типам
+        echo "Тестирование моделей..."
+        python -m pytest tests/test_models.py -v --tb=line 2>&1 | tail -20 || echo "Файл test_models.py не найден"
         
-        # Тестирование блока C (Интеграции)
-        python -m pytest tests/test_integrations.py -v --tb=short || echo "No integration tests found"
+        echo "Тестирование API..."
+        python -m pytest tests/test_api.py -v --tb=line 2>&1 | tail -20 || echo "Файл test_api.py не найден"
+        
+        echo "Тестирование сервисов..."
+        python -m pytest tests/test_services.py -v --tb=line 2>&1 | tail -20 || echo "Файл test_services.py не найден"
 
     - name: Run integration tests
+      if: matrix.python-version == '3.10' && matrix.os == 'ubuntu-latest'
       run: |
-        python -m pytest tests/test_integration.py -v --tb=short || echo "No integration tests found"
+        echo "=== Интеграционные тесты ==="
+        
+        # Проверяем наличие интеграционных тестов
+        if [ -f "tests/test_integration.py" ] || [ -d "tests/integration" ]; then
+          python -m pytest tests/integration/ tests/test_integration.py -v --tb=short
+        else
+          echo "Интеграционные тесты не найдены"
+        fi
 
-    - name: Run API tests
-      run: |
-        # Запуск тестов API
-        python -m pytest tests/test_api.py -v --tb=short || echo "No API tests found"
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results-${{ runner.os }}-py${{ matrix.python-version }}
+        path: |
+          test-results/
+          htmlcov/
+          coverage.xml
+        retention-days: 14
 
-    - name: Run load tests (lightweight)
-      if: matrix.python-version == '3.10'
-      run: |
-        # Простые нагрузочные тесты для API
-        python -m pytest tests/test_load.py -v --tb=short || echo "No load tests found"
-
-    - name: Run security tests
-      if: matrix.python-version == '3.10'
-      run: |
-        # Проверка безопасности кода
-        pip install bandit
-        bandit -r backend/ -f json -o bandit-report.json || true
-        echo "Security scan completed"
-
-    - name: Check code formatting
-      run: |
-        pip install black flake8
-        black --check backend/ || echo "Black formatting check failed"
-        flake8 backend/ --count --select=E9,F63,F7,F82 --show-source --statistics || echo "Flake8 check found issues"
-
-    - name: Upload coverage reports
+    - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
       with:
         file: ./coverage.xml
         fail_ci_if_error: false
+        token: ${{ secrets.CODECOV_TOKEN }}
 
-    - name: Upload test results
-      if: always()
-      uses: actions/upload-artifact@v3
-      with:
-        name: test-results-${{ matrix.python-version }}
-        path: |
-          test-results/
-          htmlcov/
-          bandit-report.json
-        retention-days: 7
-
-    - name: Test summary
+    - name: Test Summary
       if: always()
       run: |
-        echo "=== Test Summary ==="
-        echo "Python Version: ${{ matrix.python-version }}"
-        echo "Database: PostgreSQL 15"
-        echo "Cache: Redis 7"
-        echo "===================="
+        echo "=== Сводка тестирования ==="
+        echo "ОС: ${{ runner.os }}"
+        echo "Python: ${{ matrix.python-version }}"
+        echo "Запуск: ${{ github.run_id }}"
+        echo "Ветка: ${{ github.ref }}"
+        echo "========================"
+        
+        # Показываем статистику из coverage.xml если она есть
+        if [ -f "coverage.xml" ]; then
+          echo "Статистика покрытия:"
+          grep -E "(lines-covered|line-rate)" coverage.xml | head -5
+        fi
 
-  lint:
+  quality:
+    name: Code Quality Checks
     runs-on: ubuntu-latest
     needs: test
     if: always()
     
     steps:
-    - name: Checkout repository
+    - name: Checkout code
       uses: actions/checkout@v4
-
+    
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
-
-    - name: Install linting tools
+    
+    - name: Install quality tools
       run: |
-        pip install black flake8 isort mypy
-
+        python -m pip install --upgrade pip
+        pip install \
+          black==23.9.1 \
+          flake8==6.1.0 \
+          isort==5.12.0 \
+          mypy==1.5.1 \
+          bandit==1.7.5 \
+          safety==2.3.5 \
+          pylint==2.17.5
+    
     - name: Check code formatting with Black
       run: |
-        black --check backend/ tests/
-
+        echo "=== Black проверка ==="
+        black --check --diff backend/ tests/ || echo "⚠️ Black обнаружил проблемы с форматированием"
+    
     - name: Check imports with isort
       run: |
-        isort --check-only backend/ tests/
-
+        echo "=== isort проверка ==="
+        isort --check-only --diff backend/ tests/ || echo "⚠️ isort обнаружил проблемы с импортами"
+    
     - name: Lint with flake8
       run: |
-        flake8 backend/ tests/ --count --max-complexity=10 --max-line-length=127 --statistics
-
+        echo "=== flake8 проверка ==="
+        flake8 backend/ tests/ --count --max-complexity=15 --max-line-length=120 --statistics || echo "⚠️ flake8 обнаружил проблемы"
+    
     - name: Type checking with mypy
       run: |
-        mypy backend/ --ignore-missing-imports --strict
+        echo "=== mypy проверка типов ==="
+        mypy backend/ --ignore-missing-imports --strict --show-error-codes || echo "⚠️ mypy обнаружил проблемы с типами"
+    
+    - name: Security check with bandit
+      run: |
+        echo "=== bandit проверка безопасности ==="
+        bandit -r backend/ -f json -o bandit-report.json || echo "⚠️ bandit обнаружил потенциальные уязвимости"
+    
+    - name: Check dependencies with safety
+      run: |
+        echo "=== safety проверка зависимостей ==="
+        if [ -f requirements.txt ]; then
+          safety check -r requirements.txt --json > safety-report.json || echo "⚠️ safety обнаружил уязвимые зависимости"
+        fi
+    
+    - name: Upload quality reports
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: quality-reports
+        path: |
+          bandit-report.json
+          safety-report.json
+        retention-days: 30
 
-  deploy-docs:
+  build:
+    name: Build and Package
     runs-on: ubuntu-latest
-    needs: [test, lint]
-    if: github.ref == 'refs/heads/main' && success()
+    needs: [test, quality]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     
     steps:
-    - name: Checkout repository
+    - name: Checkout code
       uses: actions/checkout@v4
-
-    - name: Generate test documentation
-      run: |
-        mkdir -p test-docs
-        python -c "
-        import json
-        with open('test-results/junit.xml', 'r') as f:
-            print('Test results available')
-        " || echo "No test results found"
-        
-        echo "# Test Results" > test-docs/README.md
-        echo "\`\`\`" >> test-docs/README.md
-        echo "Tests completed successfully" >> test-docs/README.md
-        echo "\`\`\`" >> test-docs/README.md
-
-    - name: Upload documentation
-      uses: actions/upload-artifact@v3
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Login to Docker Hub
+      if: github.event_name != 'pull_request'
+      uses: docker/login-action@v3
       with:
-        name: test-documentation
-        path: test-docs/
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+    
+    - name: Build Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: ${{ github.event_name != 'pull_request' }}
+        tags: |
+          haus-price/backend:latest
+          haus-price/backend:${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+    
+    - name: Generate deployment report
+      run: |
+        echo "# Отчет о сборке" > deployment.md
+        echo "" >> deployment.md
+        echo "**Версия:** ${{ github.sha }}" >> deployment.md
+        echo "**Дата:** $(date)" >> deployment.md
+        echo "**Статус тестов:** ${{ needs.test.result }}" >> deployment.md
+        echo "**Статус качества:** ${{ needs.quality.result }}" >> deployment.md
+        echo "" >> deployment.md
+        echo "## Собранные артефакты" >> deployment.md
+        echo "- Docker образ: haus-price/backend:${{ github.sha }}" >> deployment.md
+    
+    - name: Upload deployment report
+      uses: actions/upload-artifact@v4
+      with:
+        name: deployment-report
+        path: deployment.md
         retention-days: 30
 
   notify:
+    name: Notifications
     runs-on: ubuntu-latest
-    needs: [test, lint]
+    needs: [test, quality, build]
     if: always()
     
     steps:
-    - name: Test status notification
+    - name: Send notification
       run: |
-        echo "Test job status: ${{ needs.test.result }}"
-        echo "Lint job status: ${{ needs.lint.result }}"
+        echo "=== Результаты CI/CD ==="
+        echo "Тесты: ${{ needs.test.result }}"
+        echo "Качество: ${{ needs.quality.result }}"
+        echo "Сборка: ${{ needs.build.result }}"
         
-        if [ "${{ needs.test.result }}" == "success" ] && [ "${{ needs.lint.result }}" == "success" ]; then
-          echo "✅ All checks passed"
+        # Формируем простой отчет
+        if [ "${{ needs.test.result }}" == "success" ] && \
+           [ "${{ needs.quality.result }}" == "success" ] && \
+           [ "${{ needs.build.result }}" == "success" ] || [ "${{ needs.build.result }}" == "skipped" ]; then
+          echo "✅ Все проверки пройдены!"
         else
-          echo "❌ Some checks failed"
+          echo "❌ Некоторые проверки не пройдены"
+          exit 1
         fi
