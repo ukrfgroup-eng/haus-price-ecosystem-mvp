@@ -411,3 +411,6 @@ jobs:
           echo "❌ Некоторые проверки не пройдены"
           exit 1
         fi
+git add .github/workflows/python-tests.yml
+git commit -m "Обновлен workflow для комплексного тестирования"
+git push origin main
