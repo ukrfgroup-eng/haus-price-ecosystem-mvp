@@ -1,1 +1,12 @@
-pip install pytest pytest-cov pytest-mock flask sqlalchemy python-dotenv
+# Создайте виртуальное окружение
+python -m venv venv
+
+# Активируйте
+# Windows:
+venv\Scripts\activate
+# Mac/Linux:
+source venv/bin/activate
+
+# Установите базовые зависимости
+pip install pytest pytest-cov pytest-mock pytest-flask
+pip install flask flask-sqlalchemy python-dotenv
