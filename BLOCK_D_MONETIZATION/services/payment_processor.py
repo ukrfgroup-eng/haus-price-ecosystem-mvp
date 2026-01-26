@@ -331,3 +331,209 @@ class PaymentProcessor:
             'checked_at': datetime.utcnow().isoformat()
         }
 EOF
+import logging
+from datetime import datetime
+from typing import Dict, Any, Optional
+from enum import Enum
+
+# Импортируем существующую модель
+try:
+    from backend.models import Payment, Subscription, db
+    MODELS_AVAILABLE = True
+except ImportError:
+    MODELS_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+
+class PaymentProcessor:
+    """Обработчик платежей с интеграцией в существующие модели"""
+    
+    def __init__(self, config):
+        self.config = config
+        self._init_payment_gateways()
+    
+    def create_payment_record(self, payment_data: Dict) -> Optional[Payment]:
+        """
+        Создание записи платежа в существующей модели Payment
+        
+        Args:
+            payment_data: Данные платежа
+            
+        Returns:
+            Объект Payment или None
+        """
+        if not MODELS_AVAILABLE:
+            logger.warning("Модели не доступны, создаем тестовый платеж")
+            return self._create_mock_payment(payment_data)
+        
+        try:
+            # Генерация номера платежа
+            payment_number = f"PAY-{datetime.now().strftime('%y%m%d')}-{payment_data.get('partner_id', '000')}-{datetime.now().strftime('%H%M%S')}"
+            
+            # Создание объекта Payment
+            payment = Payment(
+                payment_number=payment_number,
+                partner_id=payment_data.get('partner_id'),
+                amount=payment_data.get('amount', 0),
+                currency=payment_data.get('currency', 'RUB'),
+                status='pending',
+                payment_type=payment_data.get('payment_type', 'subscription'),
+                tariff_plan=payment_data.get('tariff_code'),
+                description=payment_data.get('description', ''),
+                payment_system=payment_data.get('payment_system', 'yookassa'),
+                payment_system_id=payment_data.get('external_payment_id'),
+                payment_url=payment_data.get('payment_url'),
+                invoice_data=payment_data.get('invoice_data', {}),
+                created_at=datetime.utcnow()
+            )
+            
+            # Сохранение в БД
+            db.session.add(payment)
+            db.session.commit()
+            
+            logger.info(f"Создана запись платежа: {payment_number}")
+            return payment
+            
+        except Exception as e:
+            logger.error(f"Ошибка создания записи платежа: {e}")
+            db.session.rollback()
+            return None
+    
+    def update_payment_status(self, payment_id: int, status: str, 
+                            external_data: Dict = None) -> bool:
+        """
+        Обновление статуса платежа
+        
+        Args:
+            payment_id: ID платежа
+            status: Новый статус
+            external_data: Внешние данные (от платежной системы)
+            
+        Returns:
+            bool: Успешность обновления
+        """
+        if not MODELS_AVAILABLE:
+            logger.warning("Модели не доступны, пропускаем обновление")
+            return True
+        
+        try:
+            payment = Payment.query.get(payment_id)
+            if not payment:
+                logger.error(f"Платеж с ID {payment_id} не найден")
+                return False
+            
+            payment.status = status
+            payment.updated_at = datetime.utcnow()
+            
+            if status == 'completed' or status == 'succeeded':
+                payment.paid_at = datetime.utcnow()
+            
+            if external_data:
+                # Обновляем данные от платежной системы
+                payment.payment_system_id = external_data.get('payment_id')
+                if 'metadata' not in payment.invoice_data:
+                    payment.invoice_data = {}
+                payment.invoice_data['external_data'] = external_data
+            
+            db.session.commit()
+            logger.info(f"Обновлен статус платежа {payment_id}: {status}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Ошибка обновления статуса платежа: {e}")
+            db.session.rollback()
+            return False
+    
+    def get_payment_by_external_id(self, external_id: str) -> Optional[Payment]:
+        """
+        Поиск платежа по внешнему ID
+        
+        Args:
+            external_id: ID платежа в платежной системе
+            
+        Returns:
+            Объект Payment или None
+        """
+        if not MODELS_AVAILABLE:
+            return None
+        
+        try:
+            return Payment.query.filter_by(payment_system_id=external_id).first()
+        except Exception as e:
+            logger.error(f"Ошибка поиска платежа: {e}")
+            return None
+    
+    def create_subscription_record(self, subscription_data: Dict) -> Optional[Subscription]:
+        """
+        Создание записи подписки
+        
+        Args:
+            subscription_data: Данные подписки
+            
+        Returns:
+            Объект Subscription или None
+        """
+        if not MODELS_AVAILABLE:
+            return self._create_mock_subscription(subscription_data)
+        
+        try:
+            # Проверяем, есть ли уже активная подписка у партнера
+            existing_sub = Subscription.query.filter_by(
+                partner_id=subscription_data.get('partner_id'),
+                status='active'
+            ).first()
+            
+            if existing_sub:
+                # Обновляем существующую подписку
+                existing_sub.tariff_plan = subscription_data.get('tariff_code')
+                existing_sub.price = subscription_data.get('price', 0)
+                existing_sub.period = subscription_data.get('billing_period', 'monthly')
+                existing_sub.leads_included = subscription_data.get('leads_included', 0)
+                existing_sub.expires_at = subscription_data.get('expires_at')
+                existing_sub.updated_at = datetime.utcnow()
+                subscription = existing_sub
+            else:
+                # Создаем новую подписку
+                subscription = Subscription(
+                    partner_id=subscription_data.get('partner_id'),
+                    tariff_plan=subscription_data.get('tariff_code'),
+                    status='active',
+                    price=subscription_data.get('price', 0),
+                    period=subscription_data.get('billing_period', 'monthly'),
+                    leads_included=subscription_data.get('leads_included', 0),
+                    starts_at=datetime.utcnow(),
+                    expires_at=subscription_data.get('expires_at'),
+                    auto_renewal=subscription_data.get('auto_renewal', True),
+                    created_at=datetime.utcnow()
+                )
+                db.session.add(subscription)
+            
+            db.session.commit()
+            logger.info(f"Создана/обновлена подписка для партнера {subscription_data.get('partner_id')}")
+            return subscription
+            
+        except Exception as e:
+            logger.error(f"Ошибка создания подписки: {e}")
+            db.session.rollback()
+            return None
+    
+    def _create_mock_payment(self, payment_data: Dict) -> Dict:
+        """Создание тестовой записи платежа"""
+        return {
+            'id': 1,
+            'payment_number': f"PAY-{datetime.now().strftime('%y%m%d')}-TEST",
+            'partner_id': payment_data.get('partner_id'),
+            'amount': payment_data.get('amount', 0),
+            'currency': payment_data.get('currency', 'RUB'),
+            'status': 'pending',
+            'to_dict': lambda: payment_data
+        }
+    
+    def _create_mock_subscription(self, subscription_data: Dict) -> Dict:
+        """Создание тестовой подписки"""
+        return {
+            'id': 1,
+            'partner_id': subscription_data.get('partner_id'),
+            'tariff_plan': subscription_data.get('tariff_code'),
+            'status': 'active',
+            'to_dict': lambda: subscription_data
+        }
