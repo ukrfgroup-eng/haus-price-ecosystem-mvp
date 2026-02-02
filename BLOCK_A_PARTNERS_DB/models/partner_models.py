@@ -1,204 +1,128 @@
 """
-Модели данных для партнеров
-Блок A: База партнеров + Верификация
+Модели данных SQLAlchemy для партнеров
 """
 
-from enum import Enum
+from sqlalchemy import Column, String, Integer, Float, Boolean, DateTime, JSON, Text, ForeignKey, Enum, Numeric
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
+import uuid
 from datetime import datetime
-from typing import Optional, List, Dict, Any
-from dataclasses import dataclass, field
-from decimal import Decimal
+import enum
 
+from .base import Base
 
-class LegalForm(Enum):
-    """Организационно-правовая форма"""
-    OOO = "ООО"          # Общество с ограниченной ответственностью
-    IP = "ИП"            # Индивидуальный предприниматель
-    AO = "АО"            # Акционерное общество
-    ZAO = "ЗАО"          # Закрытое акционерное общество
+class LegalForm(enum.Enum):
+    OOO = "ООО"
+    IP = "ИП"
+    AO = "АО"
+    ZAO = "ЗАО"
     INVALID = "Не определено"
 
+class VerificationStatus(enum.Enum):
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    VERIFIED = "verified"
+    REJECTED = "rejected"
+    SUSPENDED = "suspended"
 
-class VerificationStatus(Enum):
-    """Статусы верификации партнера"""
-    PENDING = "pending"           # Ожидает верификации
-    IN_PROGRESS = "in_progress"   # В процессе проверки
-    VERIFIED = "verified"         # Верифицирован
-    REJECTED = "rejected"         # Отклонен
-    SUSPENDED = "suspended"       # Приостановлен
+class PartnerTier(enum.Enum):
+    BASIC = "basic"
+    PRO = "pro"
+    ENTERPRISE = "enterprise"
 
+class Partner(Base):
+    __tablename__ = "partners"
 
-class PartnerTier(Enum):
-    """Тарифный план партнера"""
-    BASIC = "basic"               # Бесплатный тариф (3 активных заявки)
-    PRO = "pro"                   # Платный тариф (10 активных заявок)
-    ENTERPRISE = "enterprise"     # Корпоративный (безлимит)
-
-
-@dataclass
-class PartnerContact:
-    """Контактные данные партнера"""
-    phone: str                    # Основной телефон
-    email: str                    # Email
-    contact_person: str           # Контактное лицо
-    position: str                 # Должность
-    telegram: Optional[str] = None
-    whatsapp: Optional[str] = None
-    website: Optional[str] = None
-    additional_phones: List[str] = field(default_factory=list)
-
-
-@dataclass
-class PartnerService:
-    """Услуга партнера с ценами"""
-    id: str                      # Уникальный ID услуги
-    name: str                    # Название услуги (например, "Ремонт ванной комнаты")
-    description: str             # Подробное описание
-    unit: str                    # Единица измерения: м², м³, шт., услуга, час
-    price_min: Decimal           # Минимальная цена
-    price_max: Decimal           # Максимальная цена
-    currency: str = "RUB"        # Валюта (RUB, USD, EUR)
-    category: Optional[str] = None  # Категория (ремонт, строительство, отделка)
-    tags: List[str] = field(default_factory=list)  # Теги (элитный, бюджетный, срочный)
-    is_active: bool = True       # Активна ли услуга
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
-
-
-@dataclass
-class PartnerDocument:
-    """Документ партнера"""
-    id: str                      # Уникальный ID документа
-    type: str                    # Тип: inn_certificate, ogrn_certificate, passport, license, insurance, extract
-    name: str                    # Оригинальное имя файла
-    s3_path: str                 # Путь в S3 хранилище
-    mime_type: str               # MIME-тип (application/pdf, image/jpeg)
-    size_bytes: int              # Размер в байтах
-    uploaded_at: datetime        # Дата загрузки
-    verified: bool = False       # Проверен ли документ
-    verification_notes: Optional[str] = None  # Комментарии при верификации
-    verified_by: Optional[str] = None         # Кто проверил (system или admin_id)
-    verified_at: Optional[datetime] = None    # Когда проверили
-
-
-@dataclass
-class Partner:
-    """Основная модель партнера"""
-    # === Идентификаторы ===
-    id: str                      # Внутренний UUID
-    public_id: str               # Публичный ID для клиентов (например, PART-001)
+    # Идентификаторы
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    public_id = Column(String(50), unique=True, nullable=False)
     
-    # === Юридическая информация ===
-    legal_name: str              # Юридическое название (полное)
-    trading_name: Optional[str] = None  # Торговое название (если отличается)
-    legal_form: LegalForm = LegalForm.INVALID
-    inn: str = ""                # ИНН (10 цифр для юр.лиц, 12 для ИП)
-    ogrn: Optional[str] = None   # ОГРН/ОГРНИП
-    kpp: Optional[str] = None    # КПП (только для юр.лиц)
-    legal_address: str = ""      # Юридический адрес
-    actual_address: Optional[str] = None  # Фактический адрес
+    # Юридическая информация
+    company_name = Column(String(200), nullable=False)
+    trading_name = Column(String(200))
+    legal_form = Column(Enum(LegalForm), nullable=False, default=LegalForm.INVALID)
+    inn = Column(String(12), unique=True, nullable=False)
+    ogrn = Column(String(15))
+    kpp = Column(String(9))
+    legal_address = Column(Text, nullable=False, default="")
+    actual_address = Column(Text)
     
-    # === Контактная информация ===
-    contact: Optional[PartnerContact] = None
+    # Контактная информация
+    phone = Column(String(20))
+    email = Column(String(120))
+    website = Column(String(200))
+    contact_person = Column(String(100))
+    contact_position = Column(String(100))
+    telegram = Column(String(100))
+    whatsapp = Column(String(20))
     
-    # === Профиль услуг ===
-    main_category: str = ""      # Основная категория деятельности
-    specializations: List[str] = field(default_factory=list)  # Специализации
-    services: List[PartnerService] = field(default_factory=list)  # Услуги с ценами
-    portfolio_items: List[Dict[str, Any]] = field(default_factory=list)  # Портфолио
+    # Профиль услуг
+    main_category = Column(String(100))
+    specializations = Column(JSON, default=[])
+    services = Column(JSON, default=[])
+    portfolio = Column(JSON, default=[])
     
-    # === География работы ===
-    regions: List[str] = field(default_factory=list)  # Коды регионов (например, ["77", "50"])
-    cities: List[str] = field(default_factory=list)   # Названия городов
-    work_radius_km: Optional[int] = None  # Радиус работы в км от указанных городов
+    # География работы
+    regions = Column(JSON, default=[])
+    cities = Column(JSON, default=[])
+    work_radius_km = Column(Integer)
     
-    # === Верификация ===
-    verification_status: VerificationStatus = VerificationStatus.PENDING
-    verification_score: float = 0.0  # Баллы верификации от 0 до 100
-    verification_date: Optional[datetime] = None
-    verified_by: Optional[str] = None  # system или admin_id
-    rejection_reason: Optional[str] = None
+    # Верификация
+    verification_status = Column(Enum(VerificationStatus), default=VerificationStatus.PENDING)
+    verification_score = Column(Float, default=0.0)
+    verification_date = Column(DateTime)
+    verified_by = Column(String(50))
+    rejection_reason = Column(Text)
     
-    # === Документы ===
-    documents: List[PartnerDocument] = field(default_factory=list)
+    # Документы
+    documents = Column(JSON, default=[])
     
-    # === Настройки и статус ===
-    tier: PartnerTier = PartnerTier.BASIC
-    is_active: bool = True       # Активен ли партнер в системе
-    is_blocked: bool = False     # Заблокирован администратором
-    max_active_leads: int = 3    # Максимум активных заявок (зависит от тарифа)
-    subscription_expires: Optional[datetime] = None  # Окончание подписки
+    # Настройки и статус
+    tier = Column(Enum(PartnerTier), default=PartnerTier.BASIC)
+    is_active = Column(Boolean, default=True)
+    is_blocked = Column(Boolean, default=False)
+    max_active_leads = Column(Integer, default=3)
+    subscription_expires = Column(DateTime)
     
-    # === Рейтинг и статистика ===
-    rating: float = 0.0          # Средний рейтинг от 0 до 5
-    reviews_count: int = 0       # Количество отзывов
-    completed_projects: int = 0  # Завершенных проектов
-    response_time_avg: Optional[float] = None  # Среднее время ответа в часах
+    # Рейтинг и статистика
+    rating = Column(Float, default=0.0)
+    reviews_count = Column(Integer, default=0)
+    completed_projects = Column(Integer, default=0)
+    response_time_avg = Column(Float)
     
-    # === Технические поля ===
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
-    created_by: Optional[str] = None  # Кто создал (bot, admin, api)
-    metadata: Dict[str, Any] = field(default_factory=dict)  # Дополнительные данные
+    # Технические поля
+    created_by = Column(String(50))
+    metadata = Column(JSON, default={})
     
-    def to_dict(self) -> Dict[str, Any]:
-        """Преобразование в словарь для API"""
+    # Временные метки
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    def to_dict(self):
         return {
-            "id": self.id,
+            "id": str(self.id),
             "public_id": self.public_id,
-            "legal_name": self.legal_name,
-            "trading_name": self.trading_name,
+            "company_name": self.company_name,
             "legal_form": self.legal_form.value,
             "verification_status": self.verification_status.value,
-            "verification_score": self.verification_score,
-            "rating": self.rating,
-            "reviews_count": self.reviews_count,
             "is_active": self.is_active,
-            "tier": self.tier.value,
-            "created_at": self.created_at.isoformat(),
-            "updated_at": self.updated_at.isoformat()
+            "rating": self.rating,
+            "created_at": self.created_at.isoformat() if self.created_at else None
         }
 
+class VerificationLog(Base):
+    __tablename__ = "verification_logs"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    partner_id = Column(UUID(as_uuid=True), ForeignKey('partners.id'))
+    action = Column(String(50))
+    status = Column(String(20))
+    details = Column(JSON, default={})
+    performed_by = Column(String(50))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Связь с партнером
+    partner = relationship("Partner")
 
-@dataclass
-class VerificationLog:
-    """Лог верификации партнера"""
-    id: str
-    partner_id: str
-    action: str                  # inn_check, document_upload, admin_review, status_change
-    status: str                  # success, failed, pending
-    details: Dict[str, Any]      # Детали действия
-    performed_by: str            # system, admin_id, partner_id
-    created_at: datetime = field(default_factory=datetime.utcnow)
-
-
-@dataclass
-class SearchFilters:
-    """Фильтры для поиска партнеров"""
-    region: Optional[str] = None
-    city: Optional[str] = None
-    specialization: Optional[str] = None
-    service_name: Optional[str] = None
-    min_rating: float = 0.0
-    max_price: Optional[Decimal] = None
-    min_completed_projects: int = 0
-    verification_required: bool = True  # Только верифицированные
-    tier: Optional[PartnerTier] = None
-    page: int = 1
-    page_size: int = 20
-    sort_by: str = "rating"      # rating, price, reviews, response_time
-    sort_order: str = "desc"     # asc, desc
-
-
-@dataclass
-class PartnerStats:
-    """Статистика партнера"""
-    partner_id: str
-    total_leads: int = 0
-    accepted_leads: int = 0
-    rejected_leads: int = 0
-    completed_leads: int = 0
-    avg_response_time_hours: Optional[float] = None
-    customer_satisfaction: float = 0.0  # 0-100%
-    last_activity: Optional[datetime] = None
-    calculated_at: datetime = field(default_factory=datetime.utcnow)
+# Инициализируем все модели
+__all__ = ['Partner', 'VerificationLog', 'LegalForm', 'VerificationStatus', 'PartnerTier']
