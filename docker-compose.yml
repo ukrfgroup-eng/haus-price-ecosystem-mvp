@@ -4,78 +4,104 @@ services:
   # PostgreSQL база данных
   postgres:
     image: postgres:15-alpine
-    container_name: haus_price_db
+    container_name: haus-price-postgres
+    restart: unless-stopped
     environment:
-      POSTGRES_DB: haus_price_db
-      POSTGRES_USER: haus_user
-      POSTGRES_PASSWORD: haus_password
+      POSTGRES_DB: haus_partners
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin123
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./infrastructure/postgresql/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./BLOCK_A_PARTNERS_DB/migrations/:/docker-entrypoint-initdb.d/
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U haus_user"]
+      test: ["CMD-SHELL", "pg_isready -U admin"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - haus-network
 
-  # Тестовая база данных
-  postgres_test:
-    image: postgres:15-alpine
-    container_name: haus_price_test_db
-    environment:
-      POSTGRES_DB: haus_price_test
-      POSTGRES_USER: test_user
-      POSTGRES_PASSWORD: test_password
+  # Redis для кеширования
+  redis:
+    image: redis:7-alpine
+    container_name: haus-price-redis
+    restart: unless-stopped
     ports:
-      - "5433:5432"
+      - "6379:6379"
+    command: redis-server --requirepass redis123
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     volumes:
-      - postgres_test_data:/var/lib/postgresql/data
+      - redis_data:/data
+    networks:
+      - haus-network
 
-  # MATRIX CORE API (Блоки A, C, D)
-  api:
+  # Блок A - Партнерская база данных
+  block-a:
     build:
-      context: .
-      dockerfile: ./infrastructure/docker/Dockerfile.api
-    container_name: haus_price_api
+      context: ./BLOCK_A_PARTNERS_DB
+      dockerfile: Dockerfile
+    container_name: haus-price-block-a
+    restart: unless-stopped
     ports:
       - "5000:5000"
     environment:
-      - DATABASE_URL=postgresql://haus_user:haus_password@postgres:5432/haus_price_db
-      - APP_ENV=production
+      - ENVIRONMENT=development
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=haus_partners
+      - DB_USER=admin
+      - DB_PASSWORD=admin123
+      - REDIS_HOST=redis
+      - REDIS_PASSWORD=redis123
+      - SECRET_KEY=dev-secret-key-change-in-production
+      - FNS_API_KEY=${FNS_API_KEY:-}
+      - LOG_LEVEL=INFO
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
-      - ./logs:/app/logs
-    restart: unless-stopped
+      - ./BLOCK_A_PARTNERS_DB:/app
+      - ./logs/block-a:/var/log
+    networks:
+      - haus-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
-  # Nginx для прокси
+  # Nginx для проксирования (опционально)
   nginx:
     image: nginx:alpine
-    container_name: haus_price_nginx
+    container_name: haus-price-nginx
+    restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - ./infrastructure/nginx/nginx.conf:/etc/nginx/nginx.conf
-      - ./infrastructure/nginx/ssl:/etc/nginx/ssl
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - ./frontend:/usr/share/nginx/html:ro
     depends_on:
-      - api
-    restart: unless-stopped
-
-  # Redis для кэширования
-  redis:
-    image: redis:7-alpine
-    container_name: haus_price_redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    command: redis-server --appendonly yes
+      - block-a
+    networks:
+      - haus-network
 
 volumes:
   postgres_data:
-  postgres_test_data:
+    driver: local
   redis_data:
+    driver: local
+
+networks:
+  haus-network:
+    driver: bridge
+    name: haus-network
