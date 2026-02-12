@@ -1,7 +1,6 @@
 version: '3.8'
 
 services:
-  # PostgreSQL база данных
   postgres:
     image: postgres:15-alpine
     container_name: haus-price-postgres
@@ -14,7 +13,6 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./BLOCK_A_PARTNERS_DB/migrations/:/docker-entrypoint-initdb.d/
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U admin"]
       interval: 10s
@@ -23,7 +21,6 @@ services:
     networks:
       - haus-network
 
-  # Redis для кеширования
   redis:
     image: redis:7-alpine
     container_name: haus-price-redis
@@ -41,11 +38,10 @@ services:
     networks:
       - haus-network
 
-  # Блок A - Партнерская база данных
   block-a:
     build:
-      context: ./BLOCK_A_PARTNERS_DB
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: BLOCK_A_PARTNERS_DB/Dockerfile
     container_name: haus-price-block-a
     restart: unless-stopped
     ports:
@@ -78,28 +74,9 @@ services:
       timeout: 10s
       retries: 3
 
-  # Nginx для проксирования (опционально)
-  nginx:
-    image: nginx:alpine
-    container_name: haus-price-nginx
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./ssl:/etc/nginx/ssl:ro
-      - ./frontend:/usr/share/nginx/html:ro
-    depends_on:
-      - block-a
-    networks:
-      - haus-network
-
 volumes:
   postgres_data:
-    driver: local
   redis_data:
-    driver: local
 
 networks:
   haus-network:
