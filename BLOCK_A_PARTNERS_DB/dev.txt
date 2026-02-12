@@ -1,9 +1,0 @@
--r block_a.txt
-
-# Разработка и тестирование
-pytest==7.4.2
-pytest-cov==4.1.0
-pytest-flask==1.2.0
-Faker==19.6.2
-black==23.9.1
-flake8==6.1.0
