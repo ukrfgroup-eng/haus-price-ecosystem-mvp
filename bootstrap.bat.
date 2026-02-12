@@ -45,17 +45,65 @@ echo [7/9] Ожидание готовности БД...
 timeout /t 15 /nobreak
 
 echo [8/9] Установка зависимостей и миграции Блока A...
+
+:: Переходим в папку блока A
 cd BLOCK_A_PARTNERS_DB
+if %errorlevel% neq 0 (
+    echo Ошибка: папка BLOCK_A_PARTNERS_DB не найдена!
+    pause
+    exit /b
+)
+
+:: Проверяем наличие Python
+python --version >nul 2>&1
+if %errorlevel% neq 0 (
+    echo Ошибка: Python не установлен или не добавлен в PATH
+    pause
+    exit /b
+)
+
+:: Создаем виртуальное окружение
 python -m venv venv
+if %errorlevel% neq 0 (
+    echo Ошибка создания виртуального окружения
+    pause
+    exit /b
+)
+
+:: Активируем виртуальное окружение
 call venv\Scripts\activate.bat
+if %errorlevel% neq 0 (
+    echo Ошибка активации виртуального окружения
+    pause
+    exit /b
+)
+
+:: Устанавливаем зависимости
 pip install -r requirements.txt
+if %errorlevel% neq 0 (
+    echo Ошибка установки зависимостей
+    pause
+    exit /b
+)
+
+:: Применяем миграции
 set FLASK_APP=run.py
 flask db upgrade
+if %errorlevel% neq 0 (
+    echo Ошибка применения миграций
+    pause
+    exit /b
+)
+
+:: Возвращаемся в корень
 cd ..
 
 echo [9/9] Проверка доступности сервисов...
 timeout /t 10 /nobreak
 curl http://localhost:5000/health
+if %errorlevel% neq 0 (
+    echo Внимание: сервис block-a не отвечает. Проверьте логи Docker.
+)
 
 echo ✅ Среда успешно развёрнута!
 pause
