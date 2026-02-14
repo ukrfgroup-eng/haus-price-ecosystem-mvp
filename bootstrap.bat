@@ -1,1 +1,0 @@
-dir bootstrap.bat
