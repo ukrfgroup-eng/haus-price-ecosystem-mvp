@@ -1,6 +1,8 @@
-from flask import request, jsonify
+from flask import Blueprint, request, jsonify
 from app.services.partner_service import create_partner, get_partner_by_inn
 from app import db
+
+bp = Blueprint('api', __name__)
 
 @bp.route('/partners', methods=['POST'])
 def create_partner_endpoint():
