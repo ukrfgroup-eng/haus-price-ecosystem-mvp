@@ -1,8 +1,8 @@
 import os
 from flask import Flask, jsonify
-from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from dotenv import load_dotenv
+from app import db   # db теперь импортируется из app/__init__.py
 
 # Загружаем корневой .env (из родительской папки проекта)
 env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
@@ -10,7 +10,6 @@ load_dotenv(dotenv_path=env_path)
 # Загружаем локальный .env (переопределяет)
 load_dotenv()
 
-db = SQLAlchemy()
 migrate = Migrate()
 
 def create_app():
@@ -43,4 +42,3 @@ if __name__ == '__main__':
     app = create_app()
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
- 
