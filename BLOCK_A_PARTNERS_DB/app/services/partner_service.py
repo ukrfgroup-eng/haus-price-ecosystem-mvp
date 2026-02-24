@@ -1,5 +1,5 @@
 from app import db
-from app.models.partner import Partner
+from app.models import Partner
 
 def create_partner(data):
     """Создаёт нового партнёра в БД."""
